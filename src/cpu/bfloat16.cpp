@@ -14,8 +14,10 @@
 * limitations under the License.
 *******************************************************************************/
 
+#include <array>
 #include <memory>
 #include "bfloat16.hpp"
+#include "bit_cast.hpp"
 #include "cpu_isa_traits.hpp"
 #include "jit_avx512_core_bf16cvt.hpp"
 
@@ -39,25 +41,26 @@ bfloat16_t &bfloat16_t::operator=(float f) {
                 1);
         cvt_one_ps_to_bf16.jit_ker(&p);
     } else {
-        float_raw r = {f};
+        auto iraw = utils::bit_cast<std::array<uint16_t, 2>>(f);
         switch (std::fpclassify(f)) {
             case FP_SUBNORMAL:
             case FP_ZERO:
                 // sign preserving zero (denormal go to zero)
-                raw_bits_ = r.iraw[1];
+                raw_bits_ = iraw[1];
                 raw_bits_ &= 0x8000;
                 break;
-            case FP_INFINITE: raw_bits_ = r.iraw[1]; break;
+            case FP_INFINITE: raw_bits_ = iraw[1]; break;
             case FP_NAN:
                 // truncate and set MSB of the mantissa force QNAN
-                raw_bits_ = r.iraw[1];
+                raw_bits_ = iraw[1];
                 raw_bits_ |= 1 << 6;
                 break;
             case FP_NORMAL:
                 // round to nearest even and truncate
-                unsigned int rounding_bias = 0x00007FFF + (r.iraw[1] & 0x1);
-                r.int_raw += rounding_bias;
-                raw_bits_ = r.iraw[1];
+                uint32_t rounding_bias = 0x00007FFF + (iraw[1] & 0x1);
+                uint32_t int_raw = utils::bit_cast<uint32_t>(f) + rounding_bias;
+                iraw = utils::bit_cast<std::array<uint16_t, 2>>(int_raw);
+                raw_bits_ = iraw[1];
                 break;
         }
     }
@@ -65,10 +68,8 @@ bfloat16_t &bfloat16_t::operator=(float f) {
 }
 
 bfloat16_t::operator float() const {
-    float_raw r = {0};
-    r.iraw[1] = raw_bits_;
-    r.iraw[0] = 0;
-    return r.fraw;
+    std::array<uint16_t, 2> iraw = {0, raw_bits_};
+    return utils::bit_cast<float>(iraw);
 }
 
 void cvt_float_to_bfloat16(bfloat16_t *out, const float *inp, size_t size) {
